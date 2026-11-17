@@ -137,4 +137,6 @@ func RegisterScalarBoolean(reg FunctionRegistry) {
 		orKleeneDoc, exec.NullComputedPrealloc)
 	makeFunction(reg, "not", 1, kernels.NotExecKernel, notDoc,
 		exec.NullIntersection)
+	// compute.Not builds calls to "invert"
+	reg.AddAlias("invert", "not")
 }
