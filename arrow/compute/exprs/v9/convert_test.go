@@ -118,7 +118,7 @@ func col(b *expr.ExprBuilder, i int32) argBuilder {
 	return b.RootRef(expr.NewStructFieldRef(i))
 }
 
-func lit[T int32 | int64 | string](b *expr.ExprBuilder, v T) expr.FuncArgBuilder {
+func litArg[T int32 | int64 | string](b *expr.ExprBuilder, v T) expr.FuncArgBuilder {
 	return b.Literal(expr.NewPrimitiveLiteral(v, false))
 }
 
@@ -153,24 +153,24 @@ func TestExecuteScalarExpression(t *testing.T) {
 			arrow.PrimitiveTypes.Int32, `[10, null, null]`},
 		{"list element", b.RootRef(&expr.StructFieldRef{Field: 3, Child: expr.NewListElemRef(0)}).BuildExpr,
 			arrow.PrimitiveTypes.Int32, `[1, 3, null]`},
-		{"comparison", b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), lit(b, int64(5))).BuildExpr,
+		{"comparison", b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(5))).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[false, true, null]`},
 		{"kleene or", b.ScalarFunc(extensions.FunctionID{URN: boolURN, Name: "or"}).Args(
-			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), lit(b, int64(5))),
+			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(5))),
 			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 1))).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[false, true, null]`},
 		{"not", b.ScalarFunc(extensions.FunctionID{URN: boolURN, Name: "not"}).Args(
 			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 1))).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[true, false, true]`},
-		{"checked add", b.ScalarFunc(extensions.FunctionID{URN: arithURN, Name: "add"}, overflow("ERROR")).Args(col(b, 0), lit(b, int64(1))).BuildExpr,
+		{"checked add", b.ScalarFunc(extensions.FunctionID{URN: arithURN, Name: "add"}, overflow("ERROR")).Args(col(b, 0), litArg(b, int64(1))).BuildExpr,
 			arrow.PrimitiveTypes.Int64, `[2, 301, null]`},
 		{"is_in", b.ScalarFunc(extensions.FunctionID{URN: icebergSetURN, Name: "is_in"}).Args(col(b, 1),
 			b.Wrap(expr.NewLiteral(expr.ListLiteralValue{expr.NewPrimitiveLiteral("foo", false), expr.NewPrimitiveLiteral("bar", false)}, false))).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[true, false, false]`},
-		{"starts_with", b.ScalarFunc(extensions.FunctionID{URN: strURN, Name: "starts_with"}).Args(col(b, 1), lit(b, "fo")).BuildExpr,
+		{"starts_with", b.ScalarFunc(extensions.FunctionID{URN: strURN, Name: "starts_with"}).Args(col(b, 1), litArg(b, "fo")).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[true, null, false]`},
 		{"starts_with ignoring case", b.ScalarFunc(extensions.FunctionID{URN: strURN, Name: "starts_with"},
-			&types.FunctionOption{Name: "case_sensitivity", Preference: []string{"CASE_INSENSITIVE"}}).Args(col(b, 1), lit(b, "fo")).BuildExpr,
+			&types.FunctionOption{Name: "case_sensitivity", Preference: []string{"CASE_INSENSITIVE"}}).Args(col(b, 1), litArg(b, "fo")).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[true, null, true]`},
 		{"cast", b.Cast(b.RootRef(&expr.StructFieldRef{Field: 2, Child: expr.NewStructFieldRef(0)}), &types.Int64Type{Nullability: nullable}).
 			FailBehavior(types.CastFailBehaviorThrowException).BuildExpr,
@@ -244,7 +244,7 @@ func TestArithmeticOverflow(t *testing.T) {
 	} {
 		t.Run(tt.pref, func(t *testing.T) {
 			e, err := b.ScalarFunc(extensions.FunctionID{URN: arithURN, Name: "add"}, overflow(tt.pref)).
-				Args(col(b, 0), lit(b, int64(math.MaxInt64))).BuildExpr()
+				Args(col(b, 0), litArg(b, int64(math.MaxInt64))).BuildExpr()
 			require.NoError(t, err)
 
 			ce, err := exprs.ToComputeExpression(testSchema, e, b.Reg)
