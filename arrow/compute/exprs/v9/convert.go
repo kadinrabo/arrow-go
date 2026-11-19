@@ -27,8 +27,38 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/arrow/scalar"
 	"github.com/substrait-io/substrait-go/v9/expr"
+	"github.com/substrait-io/substrait-go/v9/extensions"
 	"github.com/substrait-io/substrait-go/v9/types"
 )
+
+// ExecuteScalarSubstrait runs the single expression in e against
+// partialInput, a record batch or a struct array or scalar whose columns are
+// matched to the base schema of e by name. The extensions of e resolve the
+// anchors the expression uses.
+func ExecuteScalarSubstrait(ctx context.Context, e *expr.Extended, partialInput compute.Datum) (compute.Datum, error) {
+	if e == nil {
+		return nil, arrow.ErrInvalid
+	}
+
+	var toExecute expr.Expression
+	switch len(e.ReferredExpr) {
+	case 0:
+		return nil, fmt.Errorf("%w: no referred expression to execute", arrow.ErrInvalid)
+	case 1:
+		if toExecute = e.ReferredExpr[0].GetExpr(); toExecute == nil {
+			return nil, fmt.Errorf("%w: measures not implemented", arrow.ErrNotImplemented)
+		}
+	default:
+		return nil, fmt.Errorf("%w: only single referred expression implemented", arrow.ErrNotImplemented)
+	}
+
+	reg := expr.NewExtensionRegistry(e.Extensions, extensions.GetDefaultCollectionWithNoError())
+	schema, err := ToArrowSchema(e.BaseSchema, reg)
+	if err != nil {
+		return nil, err
+	}
+	return ExecuteScalarExpression(ctx, schema, toExecute, reg, partialInput)
+}
 
 // ExecuteScalarExpression converts e with ToComputeExpression and runs it
 // with compute.ExecuteScalarExpression against partialInput, a record batch

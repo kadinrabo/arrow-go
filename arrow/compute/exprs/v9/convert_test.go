@@ -96,6 +96,10 @@ var (
 			&types.ListType{Nullability: nullable, Type: &types.Int32Type{Nullability: nullable}},
 		},
 	})
+
+	// testBaseSchema with the names of testSchema, which a NamedStruct
+	// lists depth first
+	testNamedSchema = types.NamedStruct{Names: []string{"a", "b", "s", "x", "l"}, Struct: *testBaseSchema.AsStructType()}
 )
 
 const testRows = `[
@@ -208,6 +212,71 @@ func TestExecuteScalarExpression(t *testing.T) {
 			got := out.(*compute.ArrayDatum).MakeArray()
 			defer got.Release()
 			assert.Truef(t, array.Equal(expected, got), "expected: %s\ngot: %s", expected, got)
+		})
+	}
+}
+
+func TestExecuteScalarSubstrait(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	ctx := compute.WithAllocator(context.Background(), mem)
+
+	// the input lacks a and l, and has its columns in another order
+	schema := arrow.NewSchema([]arrow.Field{testSchema.Field(2), testSchema.Field(1)}, nil)
+	rec, _, err := array.RecordFromJSON(mem, schema, strings.NewReader(
+		`[{"s": {"x": 10}, "b": "foo"}, {"s": null, "b": null}, {"s": {"x": 3}, "b": "bar"}]`))
+	require.NoError(t, err)
+	defer rec.Release()
+
+	b := newBuilder()
+	gt, err := b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(
+		b.RootRef(&expr.StructFieldRef{Field: 2, Child: expr.NewStructFieldRef(0)}), litArg(b, int32(5))).BuildExpr()
+	require.NoError(t, err)
+	e := &expr.Extended{
+		Extensions:   b.Reg.Set,
+		ReferredExpr: []expr.ExpressionReference{expr.NewExpressionReference([]string{"out"}, gt)},
+		BaseSchema:   testNamedSchema,
+	}
+
+	out, err := exprs.ExecuteScalarSubstrait(ctx, e, compute.NewDatumWithoutOwning(rec))
+	require.NoError(t, err)
+	defer out.Release()
+	got := out.(*compute.ArrayDatum).MakeArray()
+	defer got.Release()
+	assert.Equal(t, "[true (null) false]", got.String())
+}
+
+func TestExecuteScalarSubstraitErrors(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	ctx := compute.WithAllocator(context.Background(), mem)
+
+	rec := testRecord(t, mem)
+	defer rec.Release()
+
+	ref, err := col(newBuilder(), 0).BuildExpr()
+	require.NoError(t, err)
+	er := expr.NewExpressionReference([]string{"out"}, ref)
+
+	tests := []struct {
+		name string
+		e    *expr.Extended
+		err  error
+	}{
+		{"nil", nil, arrow.ErrInvalid},
+		{"no expression", &expr.Extended{BaseSchema: testNamedSchema}, arrow.ErrInvalid},
+		{"two expressions", &expr.Extended{BaseSchema: testNamedSchema, ReferredExpr: []expr.ExpressionReference{er, er}},
+			arrow.ErrNotImplemented},
+		{"measure", &expr.Extended{BaseSchema: testNamedSchema, ReferredExpr: []expr.ExpressionReference{
+			expr.NewMeasureReference([]string{"out"}, &expr.AggregateFunction{})}}, arrow.ErrNotImplemented},
+		{"top-level names only", &expr.Extended{ReferredExpr: []expr.ExpressionReference{er},
+			BaseSchema: types.NamedStruct{Names: []string{"a", "b", "s", "l"}, Struct: testNamedSchema.Struct}}, arrow.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := exprs.ExecuteScalarSubstrait(ctx, tt.e, compute.NewDatumWithoutOwning(rec))
+			assert.ErrorIs(t, err, tt.err)
 		})
 	}
 }

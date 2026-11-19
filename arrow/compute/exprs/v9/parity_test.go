@@ -220,6 +220,8 @@ var (
 		{Name: "st", Type: parityStruct, Nullable: true},
 		{Name: "b", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
 	}, nil)
+	// the names of paritySchema depth first, as a NamedStruct lists them
+	parityNames = []string{"i64", "f64", "s", "ds", "d", "ts", "dec", "st", "x", "y", "b"}
 )
 
 func parityRecord(t *testing.T, mem memory.Allocator) arrow.RecordBatch {
@@ -321,9 +323,9 @@ func cStartsWith(pattern string, path ...int) compute.Expression {
 }
 
 // TestParityAcrossVersions runs each filter shape iceberg-go builds through
-// exprs on substrait-go v8, through this package on substrait-go v9, and as
-// a compute.Expression built directly, and requires the same result from
-// all three.
+// exprs on substrait-go v8, through this package on substrait-go v9 both
+// alone and in an extended expression, and as a compute.Expression built
+// directly, and requires the same result from each.
 func TestParityAcrossVersions(t *testing.T) {
 	i64, str, dict := []int32{0}, []int32{2}, []int32{3}
 	cases := []struct {
@@ -418,6 +420,14 @@ func TestParityAcrossVersions(t *testing.T) {
 			require.NoError(t, err)
 			defer got9.Release()
 
+			gotExtended, err := exprs.ExecuteScalarSubstrait(ctx, &expr.Extended{
+				Extensions:   b9.Reg.Set,
+				ReferredExpr: []expr.ExpressionReference{expr.NewExpressionReference([]string{"out"}, e9)},
+				BaseSchema:   types.NamedStruct{Names: parityNames, Struct: *b9.BaseSchema.AsStructType()},
+			}, input)
+			require.NoError(t, err)
+			defer gotExtended.Release()
+
 			ce := tc.cmp()
 			defer ce.Release()
 			gotCompute, err := compute.ExecuteScalarExpression(ctx, paritySchema, ce, input)
@@ -425,6 +435,7 @@ func TestParityAcrossVersions(t *testing.T) {
 			defer gotCompute.Release()
 
 			assertSameDatum(t, want, got9, "exprs/v9")
+			assertSameDatum(t, want, gotExtended, "exprs/v9 extended")
 			assertSameDatum(t, want, gotCompute, "compute")
 		})
 	}
