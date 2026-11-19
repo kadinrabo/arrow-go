@@ -143,6 +143,9 @@ func fromSubstraitType(t types.Type, r typeResolver) (arrow.DataType, bool, erro
 // typeFromSubstrait is fromSubstraitType with the fields of the structs in t
 // named by nextName.
 func typeFromSubstrait(t types.Type, nextName func() string, r typeResolver) (arrow.DataType, bool, error) {
+	if t == nil {
+		return nil, false, fmt.Errorf("%w: missing Substrait type", arrow.ErrInvalid)
+	}
 	nullable := isNullable(t)
 
 	if ref := t.GetTypeVariationReference(); ref > 0 {

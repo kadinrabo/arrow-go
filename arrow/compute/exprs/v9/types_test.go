@@ -103,6 +103,10 @@ func TestToArrowSchemaErrors(t *testing.T) {
 				&types.StructType{Nullability: nullable, TypeVariationRef: u8, Types: []types.Type{&types.Int32Type{Nullability: nullable}}},
 				&types.Int64Type{Nullability: nullable},
 			}}}, arrow.ErrInvalid, "use 2 of its 3 names"},
+		{"missing field type", types.NamedStruct{Names: []string{"a"}, Struct: types.StructType{
+			Types: []types.Type{nil}}}, arrow.ErrInvalid, "missing Substrait type"},
+		{"missing list element type", types.NamedStruct{Names: []string{"l"}, Struct: types.StructType{
+			Types: []types.Type{&types.ListType{Nullability: nullable}}}}, arrow.ErrInvalid, "missing Substrait type"},
 	}
 
 	for _, tt := range tests {
