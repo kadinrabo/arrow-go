@@ -38,8 +38,8 @@ const (
 )
 
 // toArrowCall maps a Substrait scalar function and its converted arguments
-// to the Arrow function to call, the arguments to pass and its options.
-type toArrowCall = func(sf *expr.ScalarFunction, args []compute.Expression) (fname string, out []compute.Expression, opts compute.FunctionOptions, err error)
+// to the compute expression that runs it.
+type toArrowCall = func(sf *expr.ScalarFunction, args []compute.Expression) (compute.Expression, error)
 
 var scalarFunctions = func() map[extensions.FunctionID]toArrowCall {
 	m := make(map[extensions.FunctionID]toArrowCall)
@@ -49,26 +49,19 @@ var scalarFunctions = func() map[extensions.FunctionID]toArrowCall {
 	for _, fn := range []string{"equal", "not_equal", "lt", "lte", "gt", "gte", "is_null", "is_not_null", "is_nan"} {
 		m[extensions.FunctionID{URN: comparisonFuncsURN, Name: fn}] = renamedFunction
 	}
-	for _, fn := range []string{"and", "or", "not"} {
-		m[extensions.FunctionID{URN: booleanFuncsURN, Name: fn}] = renamedFunction
-	}
+	m[extensions.FunctionID{URN: booleanFuncsURN, Name: "and"}] = kleene(compute.And, true)
+	m[extensions.FunctionID{URN: booleanFuncsURN, Name: "or"}] = kleene(compute.Or, false)
+	m[extensions.FunctionID{URN: booleanFuncsURN, Name: "not"}] = renamedFunction
 	m[extensions.FunctionID{URN: icebergSetFuncURN, Name: "is_in"}] = setLookup
 	m[extensions.FunctionID{URN: stringFuncsURN, Name: "starts_with"}] = startsWith
 	return m
 }()
 
-// lookupScalarFunction finds the conversion for sf, by its compound name
-// ("add:i64_i64") and then by its simple name.
+// lookupScalarFunction finds the conversion for sf by its simple name, since
+// sf.ID() names the variant it resolved to, as in "gt:any_any".
 func lookupScalarFunction(sf *expr.ScalarFunction) (toArrowCall, bool) {
 	id := sf.ID()
-	if conv, ok := scalarFunctions[id]; ok {
-		return conv, true
-	}
-	name, _, ok := strings.Cut(id.Name, ":")
-	if !ok {
-		return nil, false
-	}
-	id.Name = name
+	id.Name, _, _ = strings.Cut(id.Name, ":")
 	conv, ok := scalarFunctions[id]
 	return conv, ok
 }
@@ -78,8 +71,6 @@ var arrowFunctionNames = map[string]string{
 	"gt":  "greater",
 	"lte": "less_equal",
 	"gte": "greater_equal",
-	"or":  "or_kleene",
-	"and": "and_kleene",
 }
 
 // arrowName is the Arrow function for sf's simple name.
@@ -91,21 +82,35 @@ func arrowName(sf *expr.ScalarFunction) string {
 	return name
 }
 
-func renamedFunction(sf *expr.ScalarFunction, args []compute.Expression) (string, []compute.Expression, compute.FunctionOptions, error) {
-	return arrowName(sf), args, nil, nil
+func renamedFunction(sf *expr.ScalarFunction, args []compute.Expression) (compute.Expression, error) {
+	return compute.NewCall(arrowName(sf), args, nil), nil
+}
+
+// kleene folds Substrait's variadic and/or into nested calls to Arrow's
+// two-argument kleene functions. With no arguments it's the identity.
+func kleene(join func(lhs, rhs compute.Expression, ops ...compute.Expression) compute.Expression, identity bool) toArrowCall {
+	return func(_ *expr.ScalarFunction, args []compute.Expression) (compute.Expression, error) {
+		switch len(args) {
+		case 0:
+			return compute.NewLiteral(identity), nil
+		case 1:
+			return args[0], nil
+		}
+		return join(args[0], args[1], args[2:]...), nil
+	}
 }
 
 func overflowableArithmetic(name string) toArrowCall {
-	return func(sf *expr.ScalarFunction, args []compute.Expression) (string, []compute.Expression, compute.FunctionOptions, error) {
+	return func(sf *expr.ScalarFunction, args []compute.Expression) (compute.Expression, error) {
 		overflow, err := parseOption(sf, "overflow", &overflowParser,
 			[]overflowBehavior{overflowSILENT, overflowERROR}, overflowSILENT)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("%w: %s overflow %v", err, name, sf.GetOption("overflow"))
+			return nil, fmt.Errorf("%w: %s overflow %v", err, name, sf.GetOption("overflow"))
 		}
 		if overflow == overflowSILENT {
-			return name + "_unchecked", args, nil, nil
+			return compute.NewCall(name+"_unchecked", args, nil), nil
 		}
-		return name, args, nil, nil
+		return compute.NewCall(name, args, nil), nil
 	}
 }
 
@@ -124,58 +129,58 @@ func literalArg(sf *expr.ScalarFunction, args []compute.Expression, i int, what 
 	return lit.Literal, nil
 }
 
-func setLookup(sf *expr.ScalarFunction, args []compute.Expression) (string, []compute.Expression, compute.FunctionOptions, error) {
+func setLookup(sf *expr.ScalarFunction, args []compute.Expression) (compute.Expression, error) {
 	values, err := literalArg(sf, args, 1, "value set")
 	if err != nil {
-		return "", nil, nil, err
+		return nil, err
 	}
 
 	opts := &compute.SetOptions{NullBehavior: compute.NullMatchingMatch, ValueSet: values}
 	if sc, ok := values.(*compute.ScalarDatum); ok {
 		list, ok := sc.Value.(*scalar.List)
 		if !ok {
-			return "", nil, nil, fmt.Errorf("%w: %s value set of type %s",
+			return nil, fmt.Errorf("%w: %s value set of type %s",
 				arrow.ErrNotImplemented, sf.Name(), sc.Type())
 		}
 		opts.ValueSet = compute.NewDatumWithoutOwning(list.Value)
 	}
-	return arrowName(sf), args[:1], opts, nil
+	return compute.NewCall(arrowName(sf), args[:1], opts), nil
 }
 
 // startsWith maps CASE_INSENSITIVE to IgnoreCase. A case_sensitivity
 // preference list with only CASE_INSENSITIVE_ASCII returns an error
 // wrapping arrow.ErrNotImplemented.
-func startsWith(sf *expr.ScalarFunction, args []compute.Expression) (string, []compute.Expression, compute.FunctionOptions, error) {
+func startsWith(sf *expr.ScalarFunction, args []compute.Expression) (compute.Expression, error) {
 	sensitivity, err := parseOption(sf, "case_sensitivity", &caseSensitivityParser,
 		[]caseSensitivity{caseSensitive, caseInsensitive}, caseSensitive)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("%w: starts_with case_sensitivity %v", err, sf.GetOption("case_sensitivity"))
+		return nil, fmt.Errorf("%w: starts_with case_sensitivity %v", err, sf.GetOption("case_sensitivity"))
 	}
 
 	pattern, err := literalArg(sf, args, 1, "pattern")
 	if err != nil {
-		return "", nil, nil, err
+		return nil, err
 	}
 	sd, ok := pattern.(*compute.ScalarDatum)
 	if !ok {
-		return "", nil, nil, fmt.Errorf("%w: starts_with pattern must be a scalar", arrow.ErrNotImplemented)
+		return nil, fmt.Errorf("%w: starts_with pattern must be a scalar", arrow.ErrNotImplemented)
 	}
 	sc := sd.Value
 	if !sc.IsValid() {
-		return "", nil, nil, fmt.Errorf("%w: starts_with pattern must not be null", arrow.ErrNotImplemented)
+		return nil, fmt.Errorf("%w: starts_with pattern must not be null", arrow.ErrNotImplemented)
 	}
 	if ext, ok := sc.(*scalar.Extension); ok {
 		sc = ext.Value
 	}
 	str, ok := sc.(scalar.BinaryScalar)
 	if !ok {
-		return "", nil, nil, fmt.Errorf("%w: starts_with pattern of type %s", arrow.ErrNotImplemented, sc.DataType())
+		return nil, fmt.Errorf("%w: starts_with pattern of type %s", arrow.ErrNotImplemented, sc.DataType())
 	}
 
-	return "starts_with", args[:1], &compute.MatchSubstringOptions{
+	return compute.NewCall("starts_with", args[:1], &compute.MatchSubstringOptions{
 		Pattern:    string(str.Data()),
 		IgnoreCase: sensitivity == caseInsensitive,
-	}, nil
+	}), nil
 }
 
 type overflowBehavior string

@@ -159,6 +159,14 @@ func TestExecuteScalarExpression(t *testing.T) {
 			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(5))),
 			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 1))).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[false, true, null]`},
+		{"three-argument and", b.ScalarFunc(extensions.FunctionID{URN: boolURN, Name: "and"}).Args(
+			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(0))),
+			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(1))),
+			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(2)))).BuildExpr,
+			arrow.FixedWidthTypes.Boolean, `[false, true, null]`},
+		{"one-argument or", b.ScalarFunc(extensions.FunctionID{URN: boolURN, Name: "or"}).Args(
+			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "gt"}).Args(col(b, 0), litArg(b, int64(5)))).BuildExpr,
+			arrow.FixedWidthTypes.Boolean, `[false, true, null]`},
 		{"not", b.ScalarFunc(extensions.FunctionID{URN: boolURN, Name: "not"}).Args(
 			b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 1))).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[true, false, true]`},
@@ -230,6 +238,20 @@ func TestToComputeExpressionReuse(t *testing.T) {
 		got.Release()
 		out.Release()
 	}
+}
+
+// Substrait's and/or take any number of arguments, while Arrow's kleene
+// functions take two.
+func TestVariadicBooleanString(t *testing.T) {
+	b := newBuilder()
+	e, err := b.ScalarFunc(extensions.FunctionID{URN: boolURN, Name: "or"}).Args(
+		b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 1))).BuildExpr()
+	require.NoError(t, err)
+
+	ce, err := exprs.ToComputeExpression(testSchema, e, b.Reg)
+	require.NoError(t, err)
+	defer ce.Release()
+	assert.True(t, strings.HasPrefix(ce.String(), "is_null("), ce.String())
 }
 
 func TestArithmeticOverflow(t *testing.T) {

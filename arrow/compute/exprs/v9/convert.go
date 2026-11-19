@@ -145,11 +145,7 @@ func (c converter) scalarFunction(sf *expr.ScalarFunction) (out compute.Expressi
 		}
 	}
 
-	fname, callArgs, opts, err := conv(sf, args)
-	if err != nil {
-		return nil, err
-	}
-	return compute.NewCall(fname, callArgs, opts), nil
+	return conv(sf, args)
 }
 
 // fieldRef converts a direct reference from the root of the input. Struct
