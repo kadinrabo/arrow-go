@@ -75,6 +75,10 @@ func TestToArrowSchema(t *testing.T) {
 }
 
 func TestToArrowSchemaErrors(t *testing.T) {
+	set := extensions.NewSet()
+	u8 := set.GetTypeVariationAnchor(extensions.TypeVariationID{URN: arrowExtTypesURN, Name: "u8"})
+	reg := expr.NewExtensionRegistry(set, testCollection)
+
 	st := types.StructType{Nullability: types.NullabilityRequired, Types: []types.Type{
 		&types.Int64Type{Nullability: nullable},
 		&types.StructType{Nullability: nullable, Types: []types.Type{&types.Int32Type{Nullability: nullable}}},
@@ -93,11 +97,17 @@ func TestToArrowSchemaErrors(t *testing.T) {
 		{"unknown user-defined type", types.NamedStruct{Names: []string{"u"}, Struct: types.StructType{
 			Types: []types.Type{&types.UserDefinedType{TypeReference: 7, Nullability: nullable}}}},
 			arrow.ErrNotImplemented, "anchor 7"},
+		// the u8 variation stands in for the struct, so x names nothing
+		{"variation on a struct", types.NamedStruct{Names: []string{"s", "x", "b"}, Struct: types.StructType{
+			Types: []types.Type{
+				&types.StructType{Nullability: nullable, TypeVariationRef: u8, Types: []types.Type{&types.Int32Type{Nullability: nullable}}},
+				&types.Int64Type{Nullability: nullable},
+			}}}, arrow.ErrInvalid, "use 2 of its 3 names"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := exprs.ToArrowSchema(tt.base, expr.ExtensionRegistry{})
+			_, err := exprs.ToArrowSchema(tt.base, reg)
 			assert.ErrorIs(t, err, tt.err)
 			assert.ErrorContains(t, err, tt.msg)
 		})

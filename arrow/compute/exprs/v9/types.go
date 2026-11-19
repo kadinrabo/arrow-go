@@ -104,6 +104,12 @@ func ToArrowSchema(base types.NamedStruct, ext expr.ExtensionRegistry) (*arrow.S
 	if err != nil {
 		return nil, err
 	}
+	// a struct, list or map whose type variation resolves converts without
+	// naming the fields nested in it
+	if i != len(base.Names) {
+		return nil, fmt.Errorf("%w: schema types use %d of its %d names",
+			arrow.ErrInvalid, i, len(base.Names))
+	}
 	return arrow.NewSchema(fields, nil), nil
 }
 
