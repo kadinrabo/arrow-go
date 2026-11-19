@@ -16,7 +16,10 @@
 
 //go:build go1.18
 
-package exprs
+// Package substraittypes holds the Arrow extension types for Substrait types
+// that Arrow has no equivalent for, shared by every exprs package so their
+// types compare equal.
+package substraittypes
 
 import (
 	"encoding/json"
@@ -72,8 +75,8 @@ func (ef *simpleExtensionTypeFactory[P]) ExtensionEquals(other arrow.ExtensionTy
 		return false
 	}
 
-	rhs := other.(*simpleExtensionTypeFactory[P])
-	return ef.params == rhs.params
+	rhs, ok := other.(*simpleExtensionTypeFactory[P])
+	return ok && ef.params == rhs.params
 }
 func (ef *simpleExtensionTypeFactory[P]) ArrayType() reflect.Type {
 	return reflect.TypeOf(simpleExtensionArrayFactory[P]{})
@@ -132,16 +135,25 @@ var intervalDayType = simpleExtensionTypeFactory[intervalDayExtensionParams]{
 	},
 }
 
-func uuid() arrow.DataType { return extensions.NewUUIDType() }
-func fixedChar(length int32) arrow.DataType {
+// UUID is the Arrow type for Substrait's uuid.
+func UUID() arrow.DataType { return extensions.NewUUIDType() }
+
+// FixedChar is the Arrow type for Substrait's fixedchar<length>.
+func FixedChar(length int32) arrow.DataType {
 	return fixedCharType.CreateType(fixedCharExtensionParams{Length: length})
 }
-func varChar(length int32) arrow.DataType {
+
+// VarChar is the Arrow type for Substrait's varchar<length>.
+func VarChar(length int32) arrow.DataType {
 	return varCharType.CreateType(varCharExtensionParams{Length: length})
 }
-func intervalYear() arrow.DataType {
+
+// IntervalYear is the Arrow type for Substrait's interval_year.
+func IntervalYear() arrow.DataType {
 	return intervalYearType.CreateType(intervalYearExtensionParams{})
 }
-func intervalDay() arrow.DataType {
+
+// IntervalDay is the Arrow type for Substrait's interval_day.
+func IntervalDay() arrow.DataType {
 	return intervalDayType.CreateType(intervalDayExtensionParams{})
 }

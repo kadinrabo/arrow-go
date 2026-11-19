@@ -27,6 +27,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/compute"
+	"github.com/apache/arrow-go/v18/arrow/compute/exprs/internal/substraittypes"
 	"github.com/apache/arrow-go/v18/arrow/scalar"
 	"github.com/substrait-io/substrait-go/v8/expr"
 	"github.com/substrait-io/substrait-go/v8/extensions"
@@ -874,15 +875,15 @@ func FromSubstraitType(t types.Type, ext ExtensionIDSet) (arrow.DataType, bool, 
 	case *types.TimeType:
 		return &arrow.Time64Type{Unit: arrow.Microsecond}, nullable, nil
 	case *types.IntervalYearType:
-		return intervalYear(), nullable, nil
+		return substraittypes.IntervalYear(), nullable, nil
 	case *types.IntervalDayType:
-		return intervalDay(), nullable, nil
+		return substraittypes.IntervalDay(), nullable, nil
 	case *types.UUIDType:
-		return uuid(), nullable, nil
+		return substraittypes.UUID(), nullable, nil
 	case *types.FixedCharType:
-		return fixedChar(t.Length), nullable, nil
+		return substraittypes.FixedChar(t.Length), nullable, nil
 	case *types.VarCharType:
-		return varChar(t.Length), nullable, nil
+		return substraittypes.VarChar(t.Length), nullable, nil
 	case *types.FixedBinaryType:
 		return &arrow.FixedSizeBinaryType{ByteWidth: int(t.Length)}, nullable, nil
 	case *types.DecimalType:
