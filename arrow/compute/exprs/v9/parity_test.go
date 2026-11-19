@@ -466,3 +466,61 @@ func TestExtensionTypesShared(t *testing.T) {
 	require.NoError(t, err)
 	ce.Release()
 }
+
+// TestToArrowSchemaMatchesV8 converts one schema with both exprs packages.
+// The schema is flat because exprs on v8 only reads the top-level names of
+// a NamedStruct.
+func TestToArrowSchemaMatchesV8(t *testing.T) {
+	n8, n9 := types8.NullabilityNullable, types.NullabilityNullable
+	r8, r9 := types8.NullabilityRequired, types.NullabilityRequired
+	pairs := []struct {
+		v8 types8.Type
+		v9 types.Type
+	}{
+		{&types8.BooleanType{Nullability: r8}, &types.BooleanType{Nullability: r9}},
+		{&types8.Int8Type{Nullability: n8}, &types.Int8Type{Nullability: n9}},
+		{&types8.Int16Type{Nullability: n8}, &types.Int16Type{Nullability: n9}},
+		{&types8.Int32Type{Nullability: n8}, &types.Int32Type{Nullability: n9}},
+		{&types8.Int64Type{Nullability: n8}, &types.Int64Type{Nullability: n9}},
+		{&types8.Float32Type{Nullability: n8}, &types.Float32Type{Nullability: n9}},
+		{&types8.Float64Type{Nullability: n8}, &types.Float64Type{Nullability: n9}},
+		{&types8.StringType{Nullability: n8}, &types.StringType{Nullability: n9}},
+		{&types8.BinaryType{Nullability: n8}, &types.BinaryType{Nullability: n9}},
+		{&types8.DateType{Nullability: n8}, &types.DateType{Nullability: n9}},
+		{&types8.TimeType{Nullability: n8}, &types.TimeType{Nullability: n9}},
+		{&types8.TimestampType{Nullability: n8}, &types.TimestampType{Nullability: n9}},
+		{&types8.TimestampTzType{Nullability: n8}, &types.TimestampTzType{Nullability: n9}},
+		{&types8.PrecisionTimeType{Precision: types8.PrecisionMilliSeconds, Nullability: n8},
+			&types.PrecisionTimeType{Precision: types.PrecisionMilliSeconds, Nullability: n9}},
+		{&types8.PrecisionTimestampType{Precision: types8.PrecisionNanoSeconds, Nullability: n8},
+			&types.PrecisionTimestampType{Precision: types.PrecisionNanoSeconds, Nullability: n9}},
+		{&types8.PrecisionTimestampTzType{PrecisionTimestampType: types8.PrecisionTimestampType{Precision: types8.PrecisionSeconds, Nullability: n8}},
+			&types.PrecisionTimestampTzType{PrecisionTimestampType: types.PrecisionTimestampType{Precision: types.PrecisionSeconds, Nullability: n9}}},
+		{&types8.IntervalYearType{Nullability: n8}, &types.IntervalYearType{Nullability: n9}},
+		{&types8.IntervalDayType{Nullability: n8}, &types.IntervalDayType{Nullability: n9}},
+		{&types8.UUIDType{Nullability: n8}, &types.UUIDType{Nullability: n9}},
+		{&types8.FixedCharType{Length: 3, Nullability: n8}, &types.FixedCharType{Length: 3, Nullability: n9}},
+		{&types8.VarCharType{Length: 5, Nullability: n8}, &types.VarCharType{Length: 5, Nullability: n9}},
+		{&types8.FixedBinaryType{Length: 4, Nullability: n8}, &types.FixedBinaryType{Length: 4, Nullability: n9}},
+		{&types8.DecimalType{Precision: 9, Scale: 2, Nullability: n8}, &types.DecimalType{Precision: 9, Scale: 2, Nullability: n9}},
+		{&types8.ListType{Type: &types8.Int32Type{Nullability: n8}, Nullability: n8},
+			&types.ListType{Type: &types.Int32Type{Nullability: n9}, Nullability: n9}},
+		{&types8.MapType{Key: &types8.StringType{Nullability: r8}, Value: &types8.Int64Type{Nullability: n8}, Nullability: n8},
+			&types.MapType{Key: &types.StringType{Nullability: r9}, Value: &types.Int64Type{Nullability: n9}, Nullability: n9}},
+	}
+
+	// each field is named for its type, so a mismatch names the type
+	names := make([]string, len(pairs))
+	t8, t9 := make([]types8.Type, len(pairs)), make([]types.Type, len(pairs))
+	for i, p := range pairs {
+		names[i], t8[i], t9[i] = p.v9.String(), p.v8, p.v9
+	}
+
+	want, err := exprs8.ToArrowSchema(types8.NamedStruct{Names: names,
+		Struct: types8.StructType{Nullability: r8, Types: t8}}, exprs8.NewDefaultExtensionSet())
+	require.NoError(t, err)
+	got, err := exprs.ToArrowSchema(types.NamedStruct{Names: names,
+		Struct: types.StructType{Nullability: r9, Types: t9}}, expr.ExtensionRegistry{})
+	require.NoError(t, err)
+	assert.Truef(t, want.Equal(got), "exprs %s\ngot %s", want, got)
+}

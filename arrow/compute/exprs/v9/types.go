@@ -86,34 +86,57 @@ func isNullable(t types.Type) bool {
 	return t.GetNullability() != types.NullabilityRequired
 }
 
-// fieldsFromSubstrait produces a list of arrow fields from a list of
-// substrait types (such as the fields of a StructType) using nextName
-// to determine the names for the fields.
-func fieldsFromSubstrait(typeList []types.Type, nextName func() string, r typeResolver) (out []arrow.Field, err error) {
-	out = make([]arrow.Field, len(typeList))
-	for i, t := range typeList {
-		out[i].Name = nextName()
-		out[i].Nullable = isNullable(t)
-
-		if st, ok := t.(*types.StructType); ok {
-			fields, err := fieldsFromSubstrait(st.Types, nextName, r)
-			if err != nil {
-				return nil, err
-			}
-			out[i].Type = arrow.StructOf(fields...)
-		} else {
-			out[i].Type, _, err = fromSubstraitType(t, r)
-			if err != nil {
-				return nil, err
-			}
-		}
+// ToArrowSchema converts the Substrait schema base to an Arrow schema.
+// base.Names holds a name for every struct field in base, nested ones
+// included, in depth-first order. ext resolves the type and type variation
+// anchors base uses, and can be the zero value when it uses none.
+func ToArrowSchema(base types.NamedStruct, ext expr.ExtensionRegistry) (*arrow.Schema, error) {
+	if n := base.Struct.DepthFirstNameCount(); len(base.Names) != n {
+		return nil, fmt.Errorf("%w: schema has %d names for %d struct fields",
+			arrow.ErrInvalid, len(base.Names), n)
 	}
-	return
+
+	i := 0
+	fields, err := fieldsFromSubstrait(base.Struct.Types, func() string {
+		i++
+		return base.Names[i-1]
+	}, typeResolver{reg: ext})
+	if err != nil {
+		return nil, err
+	}
+	return arrow.NewSchema(fields, nil), nil
+}
+
+// fieldsFromSubstrait converts the field types of a struct to Arrow fields
+// named by nextName. A field takes its name before the structs nested in its
+// type take theirs, the depth-first order of a NamedStruct's names.
+func fieldsFromSubstrait(typeList []types.Type, nextName func() string, r typeResolver) ([]arrow.Field, error) {
+	out := make([]arrow.Field, len(typeList))
+	for i, t := range typeList {
+		name := nextName()
+		dt, nullable, err := typeFromSubstrait(t, nextName, r)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = arrow.Field{Name: name, Type: dt, Nullable: nullable}
+	}
+	return out, nil
 }
 
 // fromSubstraitType returns the Arrow data type for the given Substrait type
-// and whether it is nullable.
+// and whether it is nullable. Substrait struct types don't name their
+// fields, so the result numbers them in depth-first order.
 func fromSubstraitType(t types.Type, r typeResolver) (arrow.DataType, bool, error) {
+	i := 0
+	return typeFromSubstrait(t, func() string {
+		i++
+		return strconv.Itoa(i)
+	}, r)
+}
+
+// typeFromSubstrait is fromSubstraitType with the fields of the structs in t
+// named by nextName.
+func typeFromSubstrait(t types.Type, nextName func() string, r typeResolver) (arrow.DataType, bool, error) {
 	nullable := isNullable(t)
 
 	if ref := t.GetTypeVariationReference(); ref > 0 {
@@ -187,25 +210,21 @@ func fromSubstraitType(t types.Type, r typeResolver) (arrow.DataType, bool, erro
 			Scale:     t.Scale,
 		}, nullable, nil
 	case *types.StructType:
-		i := 0
-		fields, err := fieldsFromSubstrait(t.Types, func() string {
-			i++
-			return strconv.Itoa(i)
-		}, r)
+		fields, err := fieldsFromSubstrait(t.Types, nextName, r)
 		if err != nil {
 			return nil, false, err
 		}
 
 		return arrow.StructOf(fields...), nullable, nil
 	case *types.ListType:
-		elem, elemNullable, err := fromSubstraitType(t.Type, r)
+		elem, elemNullable, err := typeFromSubstrait(t.Type, nextName, r)
 		if err != nil {
 			return nil, false, err
 		}
 		return arrow.ListOfField(arrow.Field{Name: "item", Type: elem, Nullable: elemNullable}),
 			nullable, nil
 	case *types.MapType:
-		key, keyNullable, err := fromSubstraitType(t.Key, r)
+		key, keyNullable, err := typeFromSubstrait(t.Key, nextName, r)
 		if err != nil {
 			return nil, false, err
 		}
@@ -214,7 +233,7 @@ func fromSubstraitType(t types.Type, r typeResolver) (arrow.DataType, bool, erro
 				arrow.ErrInvalid)
 		}
 
-		value, valueNullable, err := fromSubstraitType(t.Value, r)
+		value, valueNullable, err := typeFromSubstrait(t.Value, nextName, r)
 		if err != nil {
 			return nil, false, err
 		}
