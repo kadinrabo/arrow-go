@@ -18,7 +18,7 @@
 // kernels.
 //
 // Deprecated: exprs is pinned to substrait-go v8 and won't follow newer
-// substrait-go major versions. Use arrow/compute/exprs/v9 to run
-// substrait-go v9 expressions, or compute.ExecuteScalarExpression to run a
-// compute.Expression.
+// substrait-go major versions. arrow/compute/exprs/v9 runs substrait-go v9
+// expressions and has its own ExecuteScalarSubstrait and ToArrowSchema. To
+// run a compute.Expression, use compute.ExecuteScalarExpression.
 package exprs
