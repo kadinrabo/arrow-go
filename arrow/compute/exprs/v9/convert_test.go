@@ -175,6 +175,9 @@ func TestExecuteScalarExpression(t *testing.T) {
 		{"cast", b.Cast(b.RootRef(&expr.StructFieldRef{Field: 2, Child: expr.NewStructFieldRef(0)}), &types.Int64Type{Nullability: nullable}).
 			FailBehavior(types.CastFailBehaviorThrowException).BuildExpr,
 			arrow.PrimitiveTypes.Int64, `[10, null, null]`},
+		{"is_in an empty list", b.ScalarFunc(extensions.FunctionID{URN: icebergSetURN, Name: "is_in"}).Args(col(b, 1),
+			b.Literal(expr.NewEmptyListLiteral(&types.StringType{Nullability: nullable}, false))).BuildExpr,
+			arrow.FixedWidthTypes.Boolean, `[false, false, false]`},
 		{"whole struct ref", b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 2)).BuildExpr,
 			arrow.FixedWidthTypes.Boolean, `[false, true, false]`},
 		{"whole list ref", b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 3)).BuildExpr,

@@ -49,43 +49,43 @@ func intervalYearToMonthDatum(mem memory.Allocator, years, months int32) (comput
 func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (compute.Datum, error) {
 	switch v := lit.(type) {
 	case *expr.PrimitiveLiteral[bool]:
-		return compute.NewDatum(scalar.NewBooleanScalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewBooleanScalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[int8]:
-		return compute.NewDatum(scalar.NewInt8Scalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewInt8Scalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[int16]:
-		return compute.NewDatum(scalar.NewInt16Scalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewInt16Scalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[int32]:
-		return compute.NewDatum(scalar.NewInt32Scalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewInt32Scalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[int64]:
-		return compute.NewDatum(scalar.NewInt64Scalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewInt64Scalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[float32]:
-		return compute.NewDatum(scalar.NewFloat32Scalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewFloat32Scalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[float64]:
-		return compute.NewDatum(scalar.NewFloat64Scalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewFloat64Scalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[string]:
-		return compute.NewDatum(scalar.NewStringScalar(v.Value)), nil
+		return &compute.ScalarDatum{Value: scalar.NewStringScalar(v.Value)}, nil
 	case *expr.PrimitiveLiteral[types.Timestamp]:
-		return compute.NewDatum(scalar.NewTimestampScalar(arrow.Timestamp(v.Value), &arrow.TimestampType{Unit: arrow.Microsecond})), nil
+		return &compute.ScalarDatum{Value: scalar.NewTimestampScalar(arrow.Timestamp(v.Value), &arrow.TimestampType{Unit: arrow.Microsecond})}, nil
 	case *expr.PrimitiveLiteral[types.TimestampTz]:
-		return compute.NewDatum(scalar.NewTimestampScalar(arrow.Timestamp(v.Value),
-			&arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: timestampTzTimezone})), nil
+		return &compute.ScalarDatum{Value: scalar.NewTimestampScalar(arrow.Timestamp(v.Value),
+			&arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: timestampTzTimezone})}, nil
 	case *expr.PrimitiveLiteral[types.Date]:
-		return compute.NewDatum(scalar.NewDate32Scalar(arrow.Date32(v.Value))), nil
+		return &compute.ScalarDatum{Value: scalar.NewDate32Scalar(arrow.Date32(v.Value))}, nil
 	case *expr.PrimitiveLiteral[types.Time]:
-		return compute.NewDatum(scalar.NewTime64Scalar(arrow.Time64(v.Value), &arrow.Time64Type{Unit: arrow.Microsecond})), nil
+		return &compute.ScalarDatum{Value: scalar.NewTime64Scalar(arrow.Time64(v.Value), &arrow.Time64Type{Unit: arrow.Microsecond})}, nil
 	case *expr.PrimitiveLiteral[types.FixedChar]:
 		length := int(v.Type.(*types.FixedCharType).Length)
-		return compute.NewDatum(scalar.NewExtensionScalar(
+		return &compute.ScalarDatum{Value: scalar.NewExtensionScalar(
 			scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte(v.Value)),
-				&arrow.FixedSizeBinaryType{ByteWidth: length}), substraittypes.FixedChar(int32(length)))), nil
+				&arrow.FixedSizeBinaryType{ByteWidth: length}), substraittypes.FixedChar(int32(length)))}, nil
 	case *expr.ByteSliceLiteral[[]byte]:
-		return compute.NewDatum(scalar.NewBinaryScalar(memory.NewBufferBytes(v.Value), arrow.BinaryTypes.Binary)), nil
+		return &compute.ScalarDatum{Value: scalar.NewBinaryScalar(memory.NewBufferBytes(v.Value), arrow.BinaryTypes.Binary)}, nil
 	case *expr.ByteSliceLiteral[types.UUID]:
-		return compute.NewDatum(scalar.NewExtensionScalar(scalar.NewFixedSizeBinaryScalar(
-			memory.NewBufferBytes(v.Value), substraittypes.UUID().(arrow.ExtensionType).StorageType()), substraittypes.UUID())), nil
+		return &compute.ScalarDatum{Value: scalar.NewExtensionScalar(scalar.NewFixedSizeBinaryScalar(
+			memory.NewBufferBytes(v.Value), substraittypes.UUID().(arrow.ExtensionType).StorageType()), substraittypes.UUID())}, nil
 	case *expr.ByteSliceLiteral[types.FixedBinary]:
-		return compute.NewDatum(scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes(v.Value),
-			&arrow.FixedSizeBinaryType{ByteWidth: int(v.Type.(*types.FixedBinaryType).Length)})), nil
+		return &compute.ScalarDatum{Value: scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes(v.Value),
+			&arrow.FixedSizeBinaryType{ByteWidth: int(v.Type.(*types.FixedBinaryType).Length)})}, nil
 	case *expr.NullLiteral:
 		dt, _, err := fromSubstraitType(v.Type, r)
 		if err != nil {
@@ -113,14 +113,27 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 			}
 		}
 
-		bldr := array.NewBuilder(memory.DefaultAllocator, elemType)
+		if elemType == nil {
+			// an empty list's element type comes from its declared type
+			dt, _, err := fromSubstraitType(v.GetType(), r)
+			if err != nil {
+				return nil, err
+			}
+			list, ok := dt.(*arrow.ListType)
+			if !ok {
+				return nil, fmt.Errorf("%w: list literal of type %s", arrow.ErrInvalid, dt)
+			}
+			elemType = list.Elem()
+		}
+
+		bldr := array.NewBuilder(mem, elemType)
 		defer bldr.Release()
 		if err := scalar.AppendSlice(bldr, values); err != nil {
 			return nil, err
 		}
 		arr := bldr.NewArray()
 		defer arr.Release()
-		return compute.NewDatum(scalar.NewListScalar(arr)), nil
+		return &compute.ScalarDatum{Value: scalar.NewListScalar(arr)}, nil
 	case *expr.MapLiteral:
 		dt, _, err := fromSubstraitType(v.Type, r)
 		if err != nil {
@@ -195,7 +208,7 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 		}
 
 		s, err := scalar.NewStructScalarWithNames(fields, names)
-		return compute.NewDatum(s), err
+		return &compute.ScalarDatum{Value: s}, err
 	case expr.IntervalYearToMonthLiteral:
 		return intervalYearToMonthDatum(mem, v.Years, v.Months)
 	case *expr.IntervalYearToMonthLiteral:
@@ -220,8 +233,8 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 				}
 			}
 
-			return compute.NewDatum(scalar.NewDecimal128Scalar(val,
-				&arrow.Decimal128Type{Precision: t.Precision, Scale: t.Scale})), nil
+			return &compute.ScalarDatum{Value: scalar.NewDecimal128Scalar(val,
+				&arrow.Decimal128Type{Precision: t.Precision, Scale: t.Scale})}, nil
 		case *types.UserDefinedType: // not yet implemented
 		case *types.IntervalYearToMonthType:
 			val := v.Value.(*types.IntervalYearToMonth)
@@ -239,8 +252,8 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 			return &compute.ScalarDatum{Value: scalar.NewExtensionScalar(
 				scalar.NewFixedSizeListScalar(arr), typ)}, nil
 		case *types.VarCharType:
-			return compute.NewDatum(scalar.NewExtensionScalar(
-				scalar.NewStringScalar(v.Value.(string)), substraittypes.VarChar(int32(t.Length)))), nil
+			return &compute.ScalarDatum{Value: scalar.NewExtensionScalar(
+				scalar.NewStringScalar(v.Value.(string)), substraittypes.VarChar(int32(t.Length)))}, nil
 		case *types.PrecisionTimeType:
 			dt, _, err := fromSubstraitType(t, r)
 			if err != nil {

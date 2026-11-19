@@ -55,19 +55,24 @@ func ToComputeExpression(schema *arrow.Schema, e expr.Expression, ext expr.Exten
 	if !e.IsScalar() {
 		return nil, fmt.Errorf("%w: cannot convert non-scalar expression %s", arrow.ErrInvalid, e)
 	}
-	c := converter{schema: schema, types: typeResolver{reg: ext}}
+	c := converter{schema: schema, types: typeResolver{reg: ext}, mem: literalMem}
 	return c.convert(e)
 }
+
+// literalMem holds converted literals in Go memory. is_in's value set ends
+// up in SetOptions, which nothing releases, so a C allocator would leak it.
+var literalMem memory.Allocator = memory.NewGoAllocator()
 
 type converter struct {
 	schema *arrow.Schema
 	types  typeResolver
+	mem    memory.Allocator
 }
 
 func (c converter) convert(e expr.Expression) (compute.Expression, error) {
 	switch e := e.(type) {
 	case expr.Literal:
-		d, err := literalToDatum(memory.DefaultAllocator, e, c.types)
+		d, err := literalToDatum(c.mem, e, c.types)
 		if err != nil {
 			return nil, err
 		}
