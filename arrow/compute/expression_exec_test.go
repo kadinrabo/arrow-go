@@ -164,3 +164,59 @@ func TestExecuteScalarExpressionErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestExecuteScalarExpressionFieldRefs(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	ctx := compute.WithAllocator(context.Background(), mem)
+
+	t.Run("null struct ancestors", func(t *testing.T) {
+		inner := arrow.StructOf(arrow.Field{Name: "x", Type: arrow.PrimitiveTypes.Int32, Nullable: true})
+		schema := arrow.NewSchema([]arrow.Field{
+			{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "s", Type: arrow.StructOf(arrow.Field{Name: "t", Type: inner, Nullable: true}), Nullable: true},
+		}, nil)
+		// the input has no column s, so s is a null struct scalar
+		rec, _, err := array.RecordFromJSON(mem, arrow.NewSchema(schema.Fields()[:1], nil), strings.NewReader(`[{"a": 1}, {"a": 2}]`))
+		require.NoError(t, err)
+		defer rec.Release()
+
+		ref := compute.NewRef(compute.FieldRefList("s", "t", "x"))
+		out, err := compute.ExecuteScalarExpression(ctx, schema, ref, compute.NewDatumWithoutOwning(rec))
+		require.NoError(t, err)
+		defer out.Release()
+		assert.True(t, scalar.Equals(scalar.MakeNullScalar(arrow.PrimitiveTypes.Int32), out.(*compute.ScalarDatum).Value))
+
+		cmp, err := compute.ExecuteScalarExpression(ctx, schema, compute.Equal(ref, compute.NewLiteral(int32(1))), compute.NewDatumWithoutOwning(rec))
+		require.NoError(t, err)
+		cmp.Release()
+	})
+
+	t.Run("path into a list", func(t *testing.T) {
+		schema := arrow.NewSchema([]arrow.Field{{Name: "l", Type: arrow.ListOf(arrow.PrimitiveTypes.Int32), Nullable: true}}, nil)
+		rec, _, err := array.RecordFromJSON(mem, schema, strings.NewReader(`[{"l": [1, 2]}, {"l": []}]`))
+		require.NoError(t, err)
+		defer rec.Release()
+
+		_, err = compute.ExecuteScalarExpression(ctx, schema, compute.NewRef(compute.FieldRefPath(compute.FieldPath{0, 0})), compute.NewDatumWithoutOwning(rec))
+		assert.ErrorIs(t, err, arrow.ErrInvalid)
+	})
+
+	t.Run("struct array with null rows", func(t *testing.T) {
+		child, _, err := array.FromJSON(mem, arrow.PrimitiveTypes.Int64, strings.NewReader(`[1, 2, 3]`))
+		require.NoError(t, err)
+		defer child.Release()
+		// row 1 is null while its child still holds 2
+		arr, err := array.NewStructArrayWithNulls([]arrow.Array{child}, []string{"a"}, memory.NewBufferBytes([]byte{0b101}), 1, 0)
+		require.NoError(t, err)
+		defer arr.Release()
+
+		schema := arrow.NewSchema([]arrow.Field{{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
+		out, err := compute.ExecuteScalarExpression(ctx, schema, compute.NewFieldRef("a"), compute.NewDatumWithoutOwning(arr))
+		require.NoError(t, err)
+		defer out.Release()
+		got := out.(*compute.ArrayDatum).MakeArray()
+		defer got.Release()
+		assert.Equal(t, "[1 (null) 3]", got.String())
+	})
+}

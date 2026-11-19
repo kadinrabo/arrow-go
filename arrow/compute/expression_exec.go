@@ -91,6 +91,10 @@ func execParameter(ctx context.Context, schema *arrow.Schema, input ExecBatch, p
 	if err != nil {
 		return nil, err
 	}
+	fieldType, err := structPathType(schema, path)
+	if err != nil {
+		return nil, err
+	}
 
 	switch v := input.Values[path[0]].(type) {
 	case *ArrayDatum:
@@ -114,14 +118,29 @@ func execParameter(ctx context.Context, schema *arrow.Schema, input ExecBatch, p
 					arrow.ErrInvalid, sc.DataType())
 			}
 			if !st.IsValid() {
-				dt := st.Type.(*arrow.StructType).Field(i).Type
-				return &ScalarDatum{Value: scalar.MakeNullScalar(dt)}, nil
+				// every field under a null struct is null
+				return &ScalarDatum{Value: scalar.MakeNullScalar(fieldType)}, nil
 			}
 			sc = st.Value[i]
 		}
 		return NewDatum(sc), nil
 	}
 	return nil, fmt.Errorf("%w: field ref into %s", arrow.ErrNotImplemented, input.Values[path[0]])
+}
+
+// structPathType returns the type of the field at path in schema. FindOne
+// also resolves paths into list elements, which a field reference can't
+// select, so every step must be into a struct.
+func structPathType(schema *arrow.Schema, path FieldPath) (arrow.DataType, error) {
+	dt := schema.Field(path[0]).Type
+	for _, i := range path[1:] {
+		st, ok := dt.(*arrow.StructType)
+		if !ok {
+			return nil, fmt.Errorf("%w: struct field ref for non struct type %s", arrow.ErrInvalid, dt)
+		}
+		dt = st.Field(i).Type
+	}
+	return dt, nil
 }
 
 // exprStructField returns field i of a struct array as a new array, sliced
@@ -225,16 +244,31 @@ func makeExprExecBatch(ctx context.Context, schema *arrow.Schema, partial Datum)
 
 	part, ok := partial.(ArrayLikeDatum)
 	if !ok {
-		return out, fmt.Errorf("%w: MakeExecBatch from %s", arrow.ErrNotImplemented, partial)
+		return out, fmt.Errorf("%w: executing an expression against %s", arrow.ErrNotImplemented, partial)
 	}
 
 	if part.Type().ID() == arrow.STRUCT {
 		switch part := part.(type) {
 		case *ArrayDatum:
-			arr := part.MakeArray().(*array.Struct)
-			defer arr.Release()
+			// the columns carry the struct's nulls, so a null row reads as
+			// null whatever its children hold
+			st := part.Type().(*arrow.StructType)
+			cols := make([]arrow.Array, 0, st.NumFields())
+			defer func() {
+				for _, c := range cols {
+					c.Release()
+				}
+			}()
+			for i := range st.NumFields() {
+				child, err := exprStructField(GetAllocator(ctx), part.Value, i)
+				if err != nil {
+					return out, err
+				}
+				cols = append(cols, array.MakeFromData(child))
+				child.Release()
+			}
 
-			batch := array.RecordFromStructArray(arr, nil)
+			batch := array.NewRecordBatch(arrow.NewSchema(st.Fields(), nil), cols, part.Len())
 			defer batch.Release()
 			return makeExprExecBatch(ctx, schema, NewDatumWithoutOwning(batch))
 		case *ScalarDatum:
@@ -271,5 +305,5 @@ func makeExprExecBatch(ctx context.Context, schema *arrow.Schema, partial Datum)
 		}
 	}
 
-	return out, fmt.Errorf("%w: MakeExecBatch from %s", arrow.ErrNotImplemented, partial)
+	return out, fmt.Errorf("%w: executing an expression against %s", arrow.ErrNotImplemented, partial)
 }
