@@ -443,3 +443,26 @@ func assertSameDatum(t *testing.T, want, got compute.Datum, path string) {
 		assert.Truef(t, scalar.Equals(w.Value, gs), "%s: exprs %v, got %v", path, w.Value, gs)
 	}
 }
+
+// Both exprs packages build their Arrow types for Substrait's varchar and
+// similar types from one definition, so a schema from one works with the
+// other.
+func TestExtensionTypesShared(t *testing.T) {
+	ns := types8.NamedStruct{Names: []string{"v"}, Struct: types8.StructType{
+		Nullability: types8.NullabilityRequired,
+		Types:       []types8.Type{&types8.VarCharType{Length: 5, Nullability: types8.NullabilityNullable}},
+	}}
+	schema, err := exprs8.ToArrowSchema(ns, exprs8.NewDefaultExtensionSet())
+	require.NoError(t, err)
+
+	base := types.NewRecordTypeFromStruct(types.StructType{
+		Nullability: types.NullabilityRequired,
+		Types:       []types.Type{&types.VarCharType{Length: 5, Nullability: types.NullabilityNullable}},
+	})
+	ref, err := expr.NewRootFieldRef(expr.NewStructFieldRef(0), base)
+	require.NoError(t, err)
+
+	ce, err := exprs.ToComputeExpression(schema, ref, expr.ExtensionRegistry{})
+	require.NoError(t, err)
+	ce.Release()
+}

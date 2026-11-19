@@ -25,6 +25,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/compute"
+	"github.com/apache/arrow-go/v18/arrow/compute/exprs/internal/substraittypes"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/endian"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -42,7 +43,7 @@ func intervalYearToMonthDatum(mem memory.Allocator, years, months int32) (comput
 	arr := bldr.NewArray()
 	defer arr.Release()
 	return &compute.ScalarDatum{Value: scalar.NewExtensionScalar(
-		scalar.NewFixedSizeListScalar(arr), intervalYear())}, nil
+		scalar.NewFixedSizeListScalar(arr), substraittypes.IntervalYear())}, nil
 }
 
 func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (compute.Datum, error) {
@@ -76,12 +77,12 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 		length := int(v.Type.(*types.FixedCharType).Length)
 		return compute.NewDatum(scalar.NewExtensionScalar(
 			scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte(v.Value)),
-				&arrow.FixedSizeBinaryType{ByteWidth: length}), fixedChar(int32(length)))), nil
+				&arrow.FixedSizeBinaryType{ByteWidth: length}), substraittypes.FixedChar(int32(length)))), nil
 	case *expr.ByteSliceLiteral[[]byte]:
 		return compute.NewDatum(scalar.NewBinaryScalar(memory.NewBufferBytes(v.Value), arrow.BinaryTypes.Binary)), nil
 	case *expr.ByteSliceLiteral[types.UUID]:
 		return compute.NewDatum(scalar.NewExtensionScalar(scalar.NewFixedSizeBinaryScalar(
-			memory.NewBufferBytes(v.Value), uuid().(arrow.ExtensionType).StorageType()), uuid())), nil
+			memory.NewBufferBytes(v.Value), substraittypes.UUID().(arrow.ExtensionType).StorageType()), substraittypes.UUID())), nil
 	case *expr.ByteSliceLiteral[types.FixedBinary]:
 		return compute.NewDatum(scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes(v.Value),
 			&arrow.FixedSizeBinaryType{ByteWidth: int(v.Type.(*types.FixedBinaryType).Length)})), nil
@@ -230,7 +231,7 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 			defer bldr.Release()
 
 			val := v.Value.(*types.IntervalDayToSecond)
-			typ := intervalDay()
+			typ := substraittypes.IntervalDay()
 			bldr.Append(val.Days)
 			bldr.Append(val.Seconds)
 			arr := bldr.NewArray()
@@ -239,7 +240,7 @@ func literalToDatum(mem memory.Allocator, lit expr.Literal, r typeResolver) (com
 				scalar.NewFixedSizeListScalar(arr), typ)}, nil
 		case *types.VarCharType:
 			return compute.NewDatum(scalar.NewExtensionScalar(
-				scalar.NewStringScalar(v.Value.(string)), varChar(int32(t.Length)))), nil
+				scalar.NewStringScalar(v.Value.(string)), substraittypes.VarChar(int32(t.Length)))), nil
 		case *types.PrecisionTimeType:
 			dt, _, err := fromSubstraitType(t, r)
 			if err != nil {
