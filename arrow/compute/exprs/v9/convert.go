@@ -33,8 +33,15 @@ import (
 
 // ExecuteScalarSubstrait runs the single expression in e against
 // partialInput, a record batch or a struct array or scalar whose columns are
-// matched to the base schema of e by name. The extensions of e resolve the
-// anchors the expression uses.
+// matched to the base schema of e by name, case-sensitively. Columns missing
+// from the input are null. The extensions of e resolve the anchors the
+// expression uses, and compute.WithAllocator on ctx sets the allocator.
+//
+// Each call casts every input column whose type differs from the base
+// schema, even ones the expression doesn't use. Substrait has no dictionary
+// or large string and binary types, so those columns are always cast. When
+// the input's columns are in base schema order, ExecuteScalarExpression with
+// the input's own schema avoids that.
 func ExecuteScalarSubstrait(ctx context.Context, e *expr.Extended, partialInput compute.Datum) (compute.Datum, error) {
 	if e == nil {
 		return nil, arrow.ErrInvalid
