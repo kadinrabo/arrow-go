@@ -175,6 +175,10 @@ func TestExecuteScalarExpression(t *testing.T) {
 		{"cast", b.Cast(b.RootRef(&expr.StructFieldRef{Field: 2, Child: expr.NewStructFieldRef(0)}), &types.Int64Type{Nullability: nullable}).
 			FailBehavior(types.CastFailBehaviorThrowException).BuildExpr,
 			arrow.PrimitiveTypes.Int64, `[10, null, null]`},
+		{"whole struct ref", b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 2)).BuildExpr,
+			arrow.FixedWidthTypes.Boolean, `[false, true, false]`},
+		{"whole list ref", b.ScalarFunc(extensions.FunctionID{URN: cmpURN, Name: "is_null"}).Args(col(b, 3)).BuildExpr,
+			arrow.FixedWidthTypes.Boolean, `[false, false, true]`},
 	}
 
 	for _, tt := range tests {
@@ -290,6 +294,7 @@ func TestToComputeExpressionErrors(t *testing.T) {
 	}
 	listElemThenField := &expr.FieldReference{Root: expr.RootReference, Reference: &expr.StructFieldRef{
 		Field: 3, Child: &expr.ListElementRef{Offset: 0, Child: expr.NewStructFieldRef(0)}}}
+	outOfRange := &expr.FieldReference{Root: expr.RootReference, Reference: expr.NewStructFieldRef(10)}
 	mapKey := &expr.FieldReference{Root: expr.RootReference, Reference: &expr.StructFieldRef{
 		Field: 0, Child: expr.NewMapKeyRef(expr.NewPrimitiveLiteral("k", false))}}
 
@@ -312,6 +317,7 @@ func TestToComputeExpressionErrors(t *testing.T) {
 			arrow.ErrInvalid, "referenced field .field(0) was int32, but should have been int64"},
 		{"field reference without a schema", nil, mustBuild(b.RootRef(expr.NewStructFieldRef(0)).BuildExpr()),
 			arrow.ErrInvalid, "schema"},
+		{"field out of range", testSchema, outOfRange, compute.ErrIndexRange, ""},
 		{"struct field of a list element", testSchema, listElemThenField, arrow.ErrNotImplemented, "list element"},
 		{"map key", testSchema, mapKey, arrow.ErrNotImplemented, "MapKeyRef"},
 		{"user-defined type without extensions", testSchema,

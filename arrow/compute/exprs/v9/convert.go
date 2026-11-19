@@ -92,14 +92,14 @@ func (c converter) cast(e *expr.Cast) (compute.Expression, error) {
 		return nil, fmt.Errorf("%w: could not determine type for cast", err)
 	}
 
-	var opts *compute.CastOptions
 	switch e.FailureBehavior {
 	case types.CastFailBehaviorThrowException:
-		opts = compute.SafeCastOptions(dt)
+		// compute.Cast is a safe cast, so values that overflow or would be
+		// truncated fail
 	case types.CastFailBehaviorUnspecified:
 		return nil, fmt.Errorf("%w: cast behavior unspecified", arrow.ErrInvalid)
 	case types.CastFailBehaviorReturnNull:
-		return nil, fmt.Errorf("%w: cast behavior return nil", arrow.ErrNotImplemented)
+		return nil, fmt.Errorf("%w: cast behavior return null", arrow.ErrNotImplemented)
 	default:
 		return nil, fmt.Errorf("%w: cast behavior %v", arrow.ErrNotImplemented, e.FailureBehavior)
 	}
@@ -108,7 +108,7 @@ func (c converter) cast(e *expr.Cast) (compute.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	return compute.NewCall("cast", []compute.Expression{in}, opts), nil
+	return compute.Cast(in, dt), nil
 }
 
 func (c converter) scalarFunction(sf *expr.ScalarFunction) (out compute.Expression, err error) {
@@ -163,8 +163,11 @@ func (c converter) fieldRef(e *expr.FieldReference) (_ compute.Expression, err e
 	}
 
 	sref, ok := ref.(*expr.StructFieldRef)
-	if !ok || sref.Field < 0 || int(sref.Field) >= c.schema.NumFields() {
-		return nil, arrow.ErrInvalid
+	if !ok {
+		return nil, fmt.Errorf("%w: reference starts with %T rather than a field of the input", arrow.ErrInvalid, ref)
+	}
+	if sref.Field < 0 || int(sref.Field) >= c.schema.NumFields() {
+		return nil, fmt.Errorf("%w: indices=%s", compute.ErrIndexRange, ref)
 	}
 	path := compute.FieldPath{int(sref.Field)}
 	dt := c.schema.Field(int(sref.Field)).Type
@@ -234,7 +237,7 @@ func (c converter) checkRefType(e *expr.FieldReference, dt arrow.DataType) error
 		valueType = dict.ValueType
 	}
 	switch {
-	case arrow.TypeEqual(valueType, expected):
+	case sameShape(valueType, expected):
 	case expected.ID() == arrow.STRING && valueType.ID() == arrow.LARGE_STRING:
 	case expected.ID() == arrow.BINARY && valueType.ID() == arrow.LARGE_BINARY:
 	default:
@@ -242,4 +245,29 @@ func (c converter) checkRefType(e *expr.FieldReference, dt arrow.DataType) error
 			arrow.ErrInvalid, e.Reference, dt, expected)
 	}
 	return nil
+}
+
+// sameShape reports whether a and b are the same type apart from the names
+// and nullability of nested fields. Substrait struct fields have no names,
+// so the types fromSubstraitType builds number them instead.
+func sameShape(a, b arrow.DataType) bool {
+	switch a := a.(type) {
+	case *arrow.StructType:
+		b, ok := b.(*arrow.StructType)
+		if !ok || a.NumFields() != b.NumFields() {
+			return false
+		}
+		for i := 0; i < a.NumFields(); i++ {
+			if !sameShape(a.Field(i).Type, b.Field(i).Type) {
+				return false
+			}
+		}
+		return true
+	case *arrow.FixedSizeListType:
+		b, ok := b.(*arrow.FixedSizeListType)
+		return ok && a.Len() == b.Len() && sameShape(a.Elem(), b.Elem())
+	case arrow.ListLikeType:
+		return a.ID() == b.ID() && sameShape(a.Elem(), b.(arrow.ListLikeType).Elem())
+	}
+	return arrow.TypeEqual(a, b)
 }
