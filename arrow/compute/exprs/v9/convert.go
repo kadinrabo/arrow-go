@@ -39,6 +39,11 @@ func ExecuteScalarSubstrait(ctx context.Context, e *expr.Extended, partialInput 
 	if e == nil {
 		return nil, arrow.ErrInvalid
 	}
+	// unlike an optimization, an enhancement changes what the expression
+	// means, so it can't be ignored
+	if e.AdvancedExts.GetEnhancement() != nil {
+		return nil, fmt.Errorf("%w: extended expression with an enhancement", arrow.ErrNotImplemented)
+	}
 
 	var toExecute expr.Expression
 	switch len(e.ReferredExpr) {

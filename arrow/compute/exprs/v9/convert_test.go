@@ -236,6 +236,9 @@ func TestExecuteScalarSubstrait(t *testing.T) {
 		Extensions:   b.Reg.Set,
 		ReferredExpr: []expr.ExpressionReference{expr.NewExpressionReference([]string{"out"}, gt)},
 		BaseSchema:   testNamedSchema,
+		// a consumer may ignore optimizations, unlike enhancements
+		AdvancedExts: &extensions.AdvancedExtension{Optimizations: []*extensions.Optimization{
+			{TypeUrl: "type.googleapis.com/example.Optimization"}}},
 	}
 
 	out, err := exprs.ExecuteScalarSubstrait(ctx, e, compute.NewDatumWithoutOwning(rec))
@@ -271,6 +274,9 @@ func TestExecuteScalarSubstraitErrors(t *testing.T) {
 			expr.NewMeasureReference([]string{"out"}, &expr.AggregateFunction{})}}, arrow.ErrNotImplemented},
 		{"top-level names only", &expr.Extended{ReferredExpr: []expr.ExpressionReference{er},
 			BaseSchema: types.NamedStruct{Names: []string{"a", "b", "s", "l"}, Struct: testNamedSchema.Struct}}, arrow.ErrInvalid},
+		{"enhancement", &expr.Extended{BaseSchema: testNamedSchema, ReferredExpr: []expr.ExpressionReference{er},
+			AdvancedExts: &extensions.AdvancedExtension{Enhancement: &extensions.Enhancement{
+				TypeUrl: "type.googleapis.com/example.Enhancement"}}}, arrow.ErrNotImplemented},
 	}
 
 	for _, tt := range tests {
